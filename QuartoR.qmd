@@ -4,7 +4,9 @@ format: html
 editor: visual
 ---
 
-## Analyzing and Visualizing Ridership
+#            Analyzing and Visualizing Ridership
+
+**Realized by : Heni Walha, Anis Bouhamed , Ian Collet , Mayssa Bouzid , Mariem Mazouz**
 
 ## Patterns in Île-de-France Rail Network
 
@@ -39,7 +41,7 @@ merged_data
 for (txt_file in txt_files) {
   # Read the first few lines to determine the separator
   first_lines <- readLines(txt_file, n = 5)
-  possible_separators <- c("\t", ";")  # Add other separators if needed
+  possible_separators <- c("\t", ";")  
   
   # Variable to control whether to continue to the next separator
   continue_next_separator <- TRUE
@@ -157,9 +159,9 @@ print(paste("90th Percentile:", percentile_90))
 
 ```
 
--   `After displaying the boxplot of the NB_VALD (number of validations) we see that the vast majority of the numbers are low and after displaying the 90th percentile we can conclude that the 90% of the values are below 1739.`
+-   After displaying the boxplot of the NB_VALD (number of validations) we see that the vast majority of the numbers are low and after displaying the 90th percentile we can conclude that the 90% of the values are below 1739.
 
--   `Some values are too high but aren't considered as outliers because they represent very popular zones like "LA DEFENSE" "CHATELET" and the maximum number is around 120000 which is high but still a real number.`
+-   Some values are too high but aren't considered as outliers because they represent very popular zones like "LA DEFENSE" "CHATELET" and the maximum number is around 120000 which is high but still a real number.
 
 -   **Collecting geographical data**
 
@@ -169,7 +171,7 @@ library(readxl)
 
 # Load the new dataset from Excel
 
-new_data <- read_excel("./zonesdarrets.xlsx")  # Replace with the actual path
+new_data <- read_excel("./zones-d-arrets.xlsx")  # Replace with the actual path
 new_data
 
 ```
@@ -424,14 +426,9 @@ ggplot(mean_by_weekday_and_special_period, aes(x = Weekday, y = Mean_Sum_NB_VALD
 
     ### 5. Dashboard Development using Shiny
 
-```{r}
-library(shiny)
-library(dplyr)
-library(ggplot2)
-library(leaflet)
-library(sf)
+```{=html}
+<!-- -->
 ```
-
 -   We used only 10000 points of the data because it is very slow and the pc crashes when using the whole data.
 
 ```{r}
@@ -447,12 +444,21 @@ ui <- fluidPage(
       dateInput("end_date_ref", "Select Reference End Date:", value = as.Date("2017-01-03")),
       dateInput("start_date_comp", "Select Comparison Start Date:", value = as.Date("2017-01-07")),
       dateInput("end_date_comp", "Select Comparison End Date:", value = as.Date("2017-01-10")),
-      actionButton("update_btn", "Update Comparison"),
-      leafletOutput("map_station")
+      leafletOutput("map_station"),
+      br()
     ),
     mainPanel(
-      plotOutput("ridership_comparison"),
-      tableOutput("station_stats")
+      tabsetPanel(
+        tabPanel("Ridership Comparison", 
+                 plotOutput("ridership_comparison"),
+                 tableOutput("station_stats")),
+        tabPanel("Station Statistics", 
+                 selectInput("station_name", "Select Station:", choices = unique(final_data1$LIBELLE_ARRET), selected = "PERNETY"),
+                 tableOutput("station_stats_tab")),
+        tabPanel("Holiday Statistics",
+                 selectInput("holiday_type", "Select Holiday Type:", choices = unique(final_data1$HolidayType), selected = "Public"),
+                 tableOutput("holiday_stats_tab"))
+      )
     )
   )
 )
@@ -462,6 +468,7 @@ ui <- fluidPage(
 
 # Define server
 server <- function(input, output, session) {
+  
   # Filter data based on user inputs
   filtered_data_ref <- reactive({
     final_data1 %>%
@@ -472,9 +479,7 @@ server <- function(input, output, session) {
     final_data1 %>%
       filter(JOUR >= input$start_date_comp, JOUR <= input$end_date_comp)
   })
-  print("b")
-  print(filtered_data_ref)
-  print("b")
+  
   # Update ridership comparison plot based on filtered data
   output$ridership_comparison <- renderPlot({
     ggplot() +
@@ -486,6 +491,7 @@ server <- function(input, output, session) {
            color = "Day of the Week") +
       theme_minimal()
   })
+  
   filtered_new_data <- new_data %>%
     filter(ZdCId %in% final_data1$ID_REFA_LDA) 
   
@@ -495,15 +501,15 @@ server <- function(input, output, session) {
   
   filtered_new_data$X <- st_coordinates(final_data_sf)[, "X"]
   filtered_new_data$Y <- st_coordinates(final_data_sf)[, "Y"]
-
-# Create a leaflet map for station selection
+  
+  # Create a leaflet map for station selection
   output$map_station <- renderLeaflet({
     leaflet() %>%
       addTiles() %>%
       setView(lng = mean(st_coordinates(final_data_sf$geometry)[,"X"]), lat = mean(st_coordinates(final_data_sf$geometry)[,"Y"]), zoom = 11) %>%
-      addMarkers(data = final_data_sf, lng = st_coordinates(final_data_sf$geometry)[,"X"], lat = st_coordinates(final_data_sf$geometry)[,"Y"], popup = ~ZdCId, layerId = ~ZdCId)
+      addMarkers(data = final_data_sf, lng = st_coordinates(final_data_sf$geometry)[,"X"], lat = st_coordinates(final_data_sf$geometry)[,"Y"])
   })
-# Observe the selection on the map and update station statistics
+  # Observe the selection on the map and update station statistics
   observeEvent(input$map_station_marker_click, {
     click <- input$map_station_marker_click
     if (!is.null(click)) {
@@ -514,12 +520,33 @@ server <- function(input, output, session) {
       print(str_sub(as.character(lng), end = 7))
       id = filtered_new_data %>% filter(str_detect(as.character(X), str_sub(as.character(lng), end = 7))) %>% filter(str_detect(as.character(Y), str_sub(as.character(lat), end = 7))) %>% select(ZdCId)
       print(id)
-    # Filter final_data1 based on the clicked coordinates
-    selected_station <- final_data1 %>% ungroup()%>%
-      filter(ID_REFA_LDA==id$ZdCId[1]) %>%
-      select(LIBELLE_ARRET) %>% distinct()
-    print(selected_station)
-    output$station_stats <- renderTable({
+      # Filter final_data1 based on the clicked coordinates
+      selected_station <- final_data1 %>% ungroup()%>%
+        filter(ID_REFA_LDA==id$ZdCId[1]) %>%
+        select(LIBELLE_ARRET) %>% distinct()
+      print(selected_station)
+      output$station_stats <- renderTable({
+        summarise_data <- final_data1 %>%
+          filter(LIBELLE_ARRET %in% selected_station$LIBELLE_ARRET) %>%
+          group_by(LIBELLE_ARRET, Weekday) %>%
+          summarise(
+            Total_Validations = sum(Sum_NB_VALD, na.rm = TRUE),
+            Avg_Validations = mean(Sum_NB_VALD, na.rm = TRUE),
+            Max_Validations = max(Sum_NB_VALD, na.rm = TRUE)
+          )
+        return(summarise_data)
+      })
+    }
+  })
+  
+  # Add server logic for the "Station Statistics" tab
+  observeEvent(input$station_name, {
+    selected_station <- final_data1 %>%
+      filter(LIBELLE_ARRET == input$station_name) %>%
+      select(LIBELLE_ARRET) %>% 
+      distinct()
+    
+    output$station_stats_tab <- renderTable({
       summarise_data <- final_data1 %>%
         filter(LIBELLE_ARRET %in% selected_station$LIBELLE_ARRET) %>%
         group_by(LIBELLE_ARRET, Weekday) %>%
@@ -530,10 +557,23 @@ server <- function(input, output, session) {
         )
       return(summarise_data)
     })
-    }
+  })
+  
+  # Add server logic for the "Holiday Statistics" tab
+  observeEvent(input$holiday_type, {
+    output$holiday_stats_tab <- renderTable({
+      summarise_data <- final_data1 %>%
+        filter(HolidayType == input$holiday_type) %>%
+        group_by(LIBELLE_ARRET, Weekday) %>%
+        summarise(
+          Total_Validations = sum(Sum_NB_VALD, na.rm = TRUE),
+          Avg_Validations = mean(Sum_NB_VALD, na.rm = TRUE),
+          Max_Validations = max(Sum_NB_VALD, na.rm = TRUE)
+        )
+      return(summarise_data)
+    })
   })
 }
-  
 ```
 
 ```{r}
@@ -543,9 +583,9 @@ shinyApp(ui, server)
 
 This is a screenshot on how the shiny app works:
 
-![](images/clipboard-14650199.png)
+![](UISHiny.png)
 
-### 6. Statistical Methods
+### ![](ShinyUiPanel2.png)![](SHinyUIPanel3.png)6. Statistical Methods
 
 ```{r}
 summary(final_data$Sum_NB_VALD)
@@ -586,16 +626,8 @@ wilcox.test(Sum_NB_VALD ~ HolidayType, data = final_data)
 
 ### 7. Shiny App Deployment
 
--   For the deployment we used shinyapps.io but the problem was that the free plan of this website provides only 1G of RAM as maximum. even after reducing the data size and using only 1 semester as a solution the Out Of Memory problem still occured because the data and the tasks done requires a lot more memory. The app was run locally but on a 24G RAM PC.
+-   For the deployment we used shinyapps.io you can find the Deployement folder in the github repository that contains the code that we deployed.
 
--   Here are some screenshots that the deployment is done :
+-   Here is the Link : https://rprojectigm.shinyapps.io/shiny/
 
-![](images/clipboard-3429202612.png)
-
-![](images/clipboard-675126278.png)
-
-OOM problem:
-
-![](images/clipboard-866994325.png)
-
-![](images/clipboard-1490589384.png)
+![](dep.png)
