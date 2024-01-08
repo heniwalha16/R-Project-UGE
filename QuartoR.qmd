@@ -171,7 +171,7 @@ library(readxl)
 
 # Load the new dataset from Excel
 
-new_data <- read_excel("./zones-d-arrets.xlsx")  # Replace with the actual path
+new_data <- read_excel("./data/zones-d-arrets.xlsx")  # Replace with the actual path
 new_data
 
 ```
@@ -583,9 +583,9 @@ shinyApp(ui, server)
 
 This is a screenshot on how the shiny app works:
 
-![](UISHiny.png)
+![](Images/UISHiny.png)
 
-### ![](ShinyUiPanel2.png)![](SHinyUIPanel3.png)6. Statistical Methods
+### ![](Images/ShinyUiPanel2.png)![](Images/SHinyUIPanel3.png)6. Statistical Methods
 
 ```{r}
 summary(final_data$Sum_NB_VALD)
@@ -630,4 +630,4 @@ wilcox.test(Sum_NB_VALD ~ HolidayType, data = final_data)
 
 -   Here is the Link : https://rprojectigm.shinyapps.io/shiny/
 
-![](dep.png)
+![](Images/dep.png)
