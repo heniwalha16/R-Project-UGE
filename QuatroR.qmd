@@ -1,0 +1,601 @@
+---
+title: "QuartoR"
+format: html
+editor: visual
+---
+
+## Analyzing and Visualizing Ridership
+
+## Patterns in Île-de-France Rail Network
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(stringr)
+library(readxl)
+library(shiny)
+library(sf)
+library(rsconnect)
+library(leaflet)
+```
+
+### 1. Data Collection and Cleaning
+
+```{r}
+#Directory where the CSV files are located
+data_directory <- "./data"
+
+#all TXT files in the specified directory
+txt_files <- list.files(path = data_directory, full.names = TRUE)
+
+print(txt_files)
+```
+
+```{r}
+# Create an empty data frame to store the merged data
+merged_data <- data.frame()
+merged_data
+# Loop through each TXT file and merge it into the main dataset
+for (txt_file in txt_files) {
+  # Read the first few lines to determine the separator
+  first_lines <- readLines(txt_file, n = 5)
+  possible_separators <- c("\t", ";")  # Add other separators if needed
+  
+  # Variable to control whether to continue to the next separator
+  continue_next_separator <- TRUE
+  
+  # Try each possible separator
+  for (separator in possible_separators) {
+    if (!continue_next_separator) {
+      break
+    }
+    
+    tryCatch(
+      {
+        year_data <- read.delim(txt_file, header = TRUE, sep = separator, stringsAsFactors = FALSE)
+        
+        if ("lda" %in% names(year_data)) {
+          names(year_data)[names(year_data) == "lda"] <- "ID_REFA_LDA"
+        }
+        # Convert relevant columns to character
+        year_data$ID_REFA_LDA <- as.character(year_data$ID_REFA_LDA)
+        year_data$NB_VALD <- as.character(year_data$NB_VALD)
+        
+        # Merge data
+        merged_data <- bind_rows(merged_data, year_data)
+        
+        # Set the variable to false to break out of the loop
+        continue_next_separator <- FALSE
+      },
+      error = function(e) {
+        # Continue to the next separator if an error occurs
+        continue_next_separator <- TRUE
+      }
+    )
+  }
+}
+
+```
+
+-   *We found that the NB_VALD column contains "Moins de 5" values which can't be converted to integers. We replaced these values by 0 because anything less than 5 is irrelevant.*
+
+```{r}
+# Numerical columns to convert
+cols_to_convert <- c("CODE_STIF_TRNS", "CODE_STIF_RES", "CODE_STIF_ARRET", "NB_VALD")
+
+# Replacing "Moins de 5" by 0 for the NB_VALD column
+merged_data <- merged_data %>%
+  mutate(NB_VALD = ifelse(NB_VALD == "Moins de 5", 0, as.integer(NB_VALD)))
+
+# Conversion to integers, otherwise to NA
+merged_data <- merged_data %>%
+  mutate_at(vars(cols_to_convert), as.integer)
+merged_data
+```
+
+-   We found that there are some columns with '?' values. These columns were ID_REFA_LDA and CATEGORIE_TITRE. For the CATEGORIE_TITRE column we converted it to "INCONNUE" in order to not lose too many lines of data.
+
+```{r}
+
+# Convert the empty values to NA
+merged_data[merged_data == ""] <- NA
+
+# Replace "?" with NA in the column ID_REFA_LDA
+merged_data <- merged_data %>%
+  mutate(ID_REFA_LDA = ifelse(ID_REFA_LDA == "?", NA, ID_REFA_LDA))
+# Replace "?" with NA in the column CATEGORIE_TITRE
+merged_data <- merged_data %>%
+  mutate(CATEGORIE_TITRE = ifelse(CATEGORIE_TITRE == "?", "INCONNUE", CATEGORIE_TITRE))
+
+# Count the number of missing values for each column
+missing_values <- colSums(is.na(merged_data))
+
+# Display results
+print(missing_values)
+```
+
+-   Deleting NA values.
+
+```{r}
+# Delete missing values
+merged_data <- na.omit(merged_data)
+
+# Count the number of missing values in every column
+missing_values <- colSums(is.na(merged_data))
+
+# Display the result
+print(missing_values)
+```
+
+-   remove redundant lines
+
+```{r}
+merged_data <- merged_data[!duplicated(merged_data), ]
+
+
+```
+
+-   **Checking outliers**
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+```
+
+```{r}
+boxplot(merged_data$NB_VALD)
+```
+
+```{r}
+nb <- merged_data$NB_VALD
+# Sort the column
+sorted_column <- sort(nb)
+# Calculate the 90th percentile
+percentile_90 <- quantile(sorted_column, 0.90)
+# Print the result
+print(paste("90th Percentile:", percentile_90))
+
+```
+
+-   `After displaying the boxplot of the NB_VALD (number of validations) we see that the vast majority of the numbers are low and after displaying the 90th percentile we can conclude that the 90% of the values are below 1739.`
+
+-   `Some values are too high but aren't considered as outliers because they represent very popular zones like "LA DEFENSE" "CHATELET" and the maximum number is around 120000 which is high but still a real number.`
+
+-   **Collecting geographical data**
+
+```{r}
+# Load the new dataset
+library(readxl)
+
+# Load the new dataset from Excel
+
+new_data <- read_excel("./zonesdarrets.xlsx")  # Replace with the actual path
+new_data
+
+```
+
+-   Merging the data after grouping by 'ID_REFA_LDA', 'JOUR' and 'LIBELLE_ARRET'
+
+```{r}
+
+# Select only the required columns
+selected_cols <- c("ZdAYEpsg2154", "ZdAXEpsg2154", "ZdCId")
+new_data <- new_data[, selected_cols, drop = FALSE]
+
+# Assuming merged_data contains your original dataset
+# Group merged_data by "ID_REFA_LDA" and "JOUR" and then sum NB_VALD
+final_data <- merged_data %>%
+  group_by(ID_REFA_LDA, JOUR, LIBELLE_ARRET) %>%
+  summarize(Sum_NB_VALD = sum(as.numeric(NB_VALD), na.rm = TRUE), .groups = 'drop_last') %>%
+  left_join(new_data, by = c("ID_REFA_LDA" = "ZdCId"))
+
+# View the resulting dataset
+head(final_data)
+```
+
+```{r}
+# Count the number of NA values for each column
+na_counts <- colSums(is.na(final_data))
+
+# Display the result
+print(na_counts)
+
+#delete them
+final_data <- na.omit(final_data)
+
+# Count the number of NA values for each column
+na_counts <- colSums(is.na(final_data))
+
+# Display the result
+print(na_counts)
+
+```
+
+-   We checked that our data is finally clean.
+
+### **2. Exploratory Data Analysis (EDA)**
+
+-   Converting the date column from string to date. We found that for 2023 there is a different format unlike the other years.
+
+```{r}
+final_data$JOUR <- ifelse(substr(final_data$JOUR, 1, 4) == "2023", 
+                          as.Date(final_data$JOUR, format = "%Y-%m-%d"), 
+                          as.Date(final_data$JOUR, format = "%d/%m/%Y"))
+final_data$JOUR <- as.Date(as.numeric(final_data$JOUR), origin = "1970-01-01")
+
+#Summary statistics
+summary(final_data)
+```
+
+-   Plot daily ridership trends (we summed the number of validations for each day)
+
+```{r}
+ggplot(final_data, aes(x = JOUR, y = Sum_NB_VALD)) +
+  geom_line() +
+  labs(title = "Daily Ridership Trends",
+       x = "Date",
+       y = "Sum_NB_VALD")
+
+```
+
+-   With this graph about the daily ridership data, we observe a regular drop of validations each year at the same month, mostly in july and especially august. It's due to the students and workers mostly going on vacations in august and thus stopping to use the network.
+
+    We can also observe a massive drop in early 2020, because of the covid-19 and the lockdown, so almost no one was using the network during this time. From the second semester of 2020 to the end 2022, we can see the number of users rise again with the same trends in july/august until 2023 when all restrictions were lifted and people used the network in a pre-covid amount again.
+
+-   Return a summary table showing the top three LIBELLE_ARRET based on the total number of validations Sum_NB_VALD which are la defense ,sain-lazare and gare de lyon. It is very logical to find these stations because they are very popular stations in Paris.
+
+```{r}
+# Select and arrange the top 3 LIBELLE_ARRET based on NB_VALD
+top_arrets <- final_data %>%
+  group_by(LIBELLE_ARRET) %>%
+  summarize(Total_NB_VALD = sum(Sum_NB_VALD, na.rm = TRUE)) %>%
+  top_n(3, Total_NB_VALD) %>%
+  arrange(desc(Total_NB_VALD))
+
+# Print the result
+print(top_arrets)
+```
+
+-   We zoomed for the first 3 months of the data because when we used the whole data the graph was too dense, we had a black graph as a result. Zooming was a solution to detect the seasonality.
+
+-   As we can see in the graph below there is a weekly seasonality. Each week there is a huge drop in the use of the transportation network in France. we used frequency = 7 because our unit of time is per day.
+
+```{r}
+subset_data <- final_data$Sum_NB_VALD[1:(3 * 60)]  #We put 60 because we have 2 lines for each day (the entries for each station). 3*60 is equivalent to 3 months.
+
+# Set frequency to 7 for weekly seasonality (adjust as needed)
+decomposition <- decompose(ts(subset_data, frequency = 7))
+
+# Plot the decomposed time series
+plot(decomposition)
+```
+
+```{r}
+subset_data <- final_data$Sum_NB_VALD[1:(24 * 60)]  #We put 60 because we have 2 lines for each day (the entries for each station). 24*60 is equivalent to 2 years.
+
+# Set frequency to 364 for yearly seasonality (adjust as needed)
+decomposition <- decompose(ts(subset_data, frequency = 364))
+
+# Plot the decomposed time series
+plot(decomposition)
+```
+
+-   We used only 2 years to see yearly seasonality because the data is too large (and as a result the graph becomes too dense). As we can see there is a seasonality because in august the use of transportation becomes less frequent as well as the yearly holidays.
+
+```{r}
+# Plot monthly trends
+ggplot(final_data, aes(x = format(JOUR, "%Y-%m"), y = Sum_NB_VALD)) +
+  geom_bar(stat = "summary", fun = "mean", fill = "skyblue") +
+  labs(title = "Monthly Average Ridership",
+       x = "Month",
+       y = "Mean NB_VALD")
+```
+
+-   We notice a trend every 12 months, also there is a drop in the number of validations in august for each year. But for 2020 there is a drop for almost the whole year because of COVID19 (especially the in the CURFEW period).
+
+-   The covid in 2020 caused a drop of the number of validations which is like an outlier that will affect the data and its seasonality.
+
+```{r}
+library(lubridate)
+```
+
+```{r}
+final_data
+```
+
+`{ubridate)}`
+
+-   Extract the day of the week using lubridate. Creating a new column called Weekday
+
+```{r}
+
+final_data$Weekday <- weekdays(final_data$JOUR)
+
+```
+
+-   Creating a new column indicating holiday or non-holiday called HolidayType
+
+```{r}
+# Identify holiday periods 
+holidays <- as.Date(c("2017-12-25", "2018-01-01", "2018-07-14", "2018-12-25", "2019-01-01", "2019-07-14", "2019-12-25", "2020-01-01", "2020-07-14", "2020-12-25", "2021-01-01", "2021-07-14", "2021-12-25", "2022-01-01", "2022-07-14"))
+
+# Create a variable indicating holiday or non-holiday
+final_data$HolidayType <- ifelse(floor_date(final_data$JOUR, "day") %in% holidays, "Holiday", "Non-Holiday")
+
+```
+
+-   Group by weekday and calculate the mean for each day of the week
+
+```{r}
+# Group by weekday and calculate the mean for each day of the week
+mean_by_weekday <- final_data %>%
+  group_by(Weekday, HolidayType) %>%
+  summarize(Mean_Sum_NB_VALD = mean(Sum_NB_VALD, na.rm = TRUE))
+
+```
+
+-   Calculate the mean for holiday days
+
+```{r}
+# Calculate the mean for holiday days
+mean_holiday <- mean_by_weekday %>%
+  filter(HolidayType == "Holiday") %>%
+  summarize(Mean_Sum_NB_VALD_Holiday = mean(Mean_Sum_NB_VALD, na.rm = TRUE))
+
+```
+
+-   Plot the comparison
+
+```{r}
+
+ggplot(mean_by_weekday, aes(x = Weekday, y = Mean_Sum_NB_VALD, color = HolidayType)) +
+  geom_point(size = 3) +
+  #geom_point(data = mean_holiday, aes(x = "Holiday", y = Mean_Sum_NB_VALD_Holiday), size = 3, color = "red") +
+  labs(title = "Mean Sum_NB_VALD Comparison",
+       x = "Day of the Week",
+       y = "Mean Sum_NB_VALD",
+       color = "Period") +
+  theme_minimal()
+
+```
+
+-   This scatter plot shows the average number of validations (number of people using the network) for each day of the week. It compares holidays and non holidays. As one could expect, less people use public transportation on holidays than non holidays, for the usual work days of the week. it's only different for Sunday, where more people us the transports during holidays than non holidays, because the number of users was already significantly lower than the other days.
+
+### 4. Comparison with Norms
+
+```{r}
+# Function to check if a date is within a special period
+is_special_period <- function(date, special_periods) {
+  return(any(date %in% special_periods))
+}
+
+# Get the range of years in your dataset
+data_years <- unique(year(final_data$JOUR))
+```
+
+-   Below, we create a special periods variable containing the school holidays (December and February) for each year.
+
+```{r}
+# Initialize an empty vector to store special periods
+special_periods <- c()
+
+# Loop through each year and add sequences to the special_periods vector
+for (year_val in data_years) {
+  start_date1 <- as.Date(sprintf("%d-12-17", year_val))
+  end_date1 <- as.Date(sprintf("%d-01-03", year_val + 1))
+  start_date2 <- as.Date(sprintf("%d-02-04", year_val))
+  end_date2 <- as.Date(sprintf("%d-02-20", year_val))
+  
+  special_periods <- c(special_periods, seq(start_date1, end_date1, by = "days"), seq(start_date2, end_date2, by = "days"))
+}
+# Convert numerical representations to dates
+special_periods <- as.Date(special_periods, origin="1970-01-01")
+print(special_periods)
+
+
+final_data$SpecialPeriod <- as.integer(final_data$JOUR %in% special_periods)
+
+```
+
+-   Group by weekday and special period, calculate the mean for each day
+
+```{r}
+# Group by weekday and special period, calculate the mean for each day
+mean_by_weekday_and_special_period <- final_data %>%
+  group_by(Weekday, SpecialPeriod) %>%
+  summarize(Mean_Sum_NB_VALD = mean(Sum_NB_VALD, na.rm = TRUE))
+
+
+```
+
+```{r}
+# Plot the comparison
+ggplot(mean_by_weekday_and_special_period, aes(x = Weekday, y = Mean_Sum_NB_VALD, color = SpecialPeriod)) +
+  geom_point(size = 3) +
+  labs(title = "Mean Sum_NB_VALD Comparison",
+       x = "Day of the Week",
+       y = "Mean Sum_NB_VALD",
+       color = "Special Period") +
+  theme_minimal()
+
+```
+
+-   We conclude that in school days the transportation tools are more used than in school vacation ones, also Sunday in France people don't usually leave their homes that's why there 's a drop for both there.
+
+    ### 5. Dashboard Development using Shiny
+
+```{r}
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(leaflet)
+library(sf)
+```
+
+-   We used only 10000 points of the data because it is very slow and the pc crashes when using the whole data.
+
+```{r}
+copy <- final_data
+final_data1 <- head(final_data,10000)
+# Define UI
+ui <- fluidPage(
+  titlePanel("Ridership Comparison"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      dateInput("start_date_ref", "Select Reference Start Date:", value = as.Date("2017-01-01")),
+      dateInput("end_date_ref", "Select Reference End Date:", value = as.Date("2017-01-03")),
+      dateInput("start_date_comp", "Select Comparison Start Date:", value = as.Date("2017-01-07")),
+      dateInput("end_date_comp", "Select Comparison End Date:", value = as.Date("2017-01-10")),
+      actionButton("update_btn", "Update Comparison"),
+      leafletOutput("map_station")
+    ),
+    mainPanel(
+      plotOutput("ridership_comparison"),
+      tableOutput("station_stats")
+    )
+  )
+)
+```
+
+```{r}
+
+# Define server
+server <- function(input, output, session) {
+  # Filter data based on user inputs
+  filtered_data_ref <- reactive({
+    final_data1 %>%
+      filter(JOUR >= input$start_date_ref, JOUR <= input$end_date_ref)
+  })
+  
+  filtered_data_comp <- reactive({
+    final_data1 %>%
+      filter(JOUR >= input$start_date_comp, JOUR <= input$end_date_comp)
+  })
+  print("b")
+  print(filtered_data_ref)
+  print("b")
+  # Update ridership comparison plot based on filtered data
+  output$ridership_comparison <- renderPlot({
+    ggplot() +
+      geom_line(data = filtered_data_ref(), aes(x = JOUR, y = Sum_NB_VALD, color = Weekday), linetype = "dashed") +
+      geom_line(data = filtered_data_comp(), aes(x = JOUR, y = Sum_NB_VALD, color = Weekday), linetype = "dashed") +
+      labs(title = "Ridership Comparison",
+           x = "Date",
+           y = "Total Validations",
+           color = "Day of the Week") +
+      theme_minimal()
+  })
+  filtered_new_data <- new_data %>%
+    filter(ZdCId %in% final_data1$ID_REFA_LDA) 
+  
+  print(filtered_new_data)
+  final_data_sf <- st_as_sf(filtered_new_data, coords = c("ZdAXEpsg2154", "ZdAYEpsg2154"), crs = 2154)
+  final_data_sf <- st_transform(final_data_sf, 4326)  # Transform to EPSG 4326
+  
+  filtered_new_data$X <- st_coordinates(final_data_sf)[, "X"]
+  filtered_new_data$Y <- st_coordinates(final_data_sf)[, "Y"]
+
+# Create a leaflet map for station selection
+  output$map_station <- renderLeaflet({
+    leaflet() %>%
+      addTiles() %>%
+      setView(lng = mean(st_coordinates(final_data_sf$geometry)[,"X"]), lat = mean(st_coordinates(final_data_sf$geometry)[,"Y"]), zoom = 11) %>%
+      addMarkers(data = final_data_sf, lng = st_coordinates(final_data_sf$geometry)[,"X"], lat = st_coordinates(final_data_sf$geometry)[,"Y"], popup = ~ZdCId, layerId = ~ZdCId)
+  })
+# Observe the selection on the map and update station statistics
+  observeEvent(input$map_station_marker_click, {
+    click <- input$map_station_marker_click
+    if (!is.null(click)) {
+      lat <- click$lat
+      lng <- click$lng
+      print(lat)
+      print(lng)
+      print(str_sub(as.character(lng), end = 7))
+      id = filtered_new_data %>% filter(str_detect(as.character(X), str_sub(as.character(lng), end = 7))) %>% filter(str_detect(as.character(Y), str_sub(as.character(lat), end = 7))) %>% select(ZdCId)
+      print(id)
+    # Filter final_data1 based on the clicked coordinates
+    selected_station <- final_data1 %>% ungroup()%>%
+      filter(ID_REFA_LDA==id$ZdCId[1]) %>%
+      select(LIBELLE_ARRET) %>% distinct()
+    print(selected_station)
+    output$station_stats <- renderTable({
+      summarise_data <- final_data1 %>%
+        filter(LIBELLE_ARRET %in% selected_station$LIBELLE_ARRET) %>%
+        group_by(LIBELLE_ARRET, Weekday) %>%
+        summarise(
+          Total_Validations = sum(Sum_NB_VALD, na.rm = TRUE),
+          Avg_Validations = mean(Sum_NB_VALD, na.rm = TRUE),
+          Max_Validations = max(Sum_NB_VALD, na.rm = TRUE)
+        )
+      return(summarise_data)
+    })
+    }
+  })
+}
+  
+```
+
+```{r}
+# Run the application
+shinyApp(ui, server)
+```
+
+This is a screenshot on how the shiny app works:
+
+![](images/clipboard-14650199.png)
+
+### 6. Statistical Methods
+
+```{r}
+summary(final_data$Sum_NB_VALD)
+```
+
+-   This summary provides insights into the distribution of the number of validations, including central tendency (mean, median) and dispersion (range, quartiles).
+
+-   The mean represents the average value of the data set, calculated by adding up all the values and dividing by the number of observations. In this case, the mean number of validations is 7536.
+
+-   The median is the middle value of the data set when it is sorted in ascending order. In this case, the median number of validations is 3746, which means that half of the observations have a number of validations below 3746, and half have a number of validations above 3746.
+
+```{r}
+t.test(final_data$Sum_NB_VALD ~ final_data$HolidayType)
+
+```
+
+-   The p-value is highly significant (p \< 0.05), suggesting that there is a significant difference in the number of validations between Holiday and Non-Holiday periods. The confidence interval provides a range for the difference in means, indicating that the mean number of validations is significantly lower during Holiday periods compared to Non-Holiday periods.
+
+```{r}
+hist(final_data$Sum_NB_VALD, main = "Histogram of Sum_NB_VALD")
+```
+
+-   We don't have normality! so we can't take the t.test results into consideration! ==\> we have to use wilcoxon non parametric test.
+
+```{r}
+wilcox.test(Sum_NB_VALD ~ HolidayType, data = final_data)
+```
+
+-   The results indicate a highly significant p-value (\< 2.2e-16), suggesting that there is a significant difference in the location (median) between the groups "Holiday" and "Non-Holiday."
+
+-   We can use the anova test because our data is very huge, we don't need to check normality!
+
+    ```{r}
+    anova(lm(Sum_NB_VALD ~ Weekday, data = final_data))
+    ```
+
+-   The ANOVA results show a highly significant difference in means across different weekdays. The small p-value (\< 0.05) suggests that there is a significant variation in the number of validations between at least two weekdays. The F value is large, further supporting the evidence for a significant difference. The significant result indicates that there are weekday-specific variations in ridership.
+
+### 7. Shiny App Deployment
+
+-   For the deployment we used shinyapps.io but the problem was that the free plan of this website provides only 1G of RAM as maximum. even after reducing the data size and using only 1 semester as a solution the Out Of Memory problem still occured because the data and the tasks done requires a lot more memory. The app was run locally but on a 24G RAM PC.
+
+-   Here are some screenshots that the deployment is done :
+
+![](images/clipboard-3429202612.png)
+
+![](images/clipboard-675126278.png)
+
+OOM problem:
+
+![](images/clipboard-866994325.png)
+
+![](images/clipboard-1490589384.png)
