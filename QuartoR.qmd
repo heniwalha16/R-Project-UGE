@@ -92,7 +92,7 @@ merged_data <- merged_data %>%
 # Conversion to integers, otherwise to NA
 merged_data <- merged_data %>%
   mutate_at(vars(cols_to_convert), as.integer)
-merged_data
+head(merged_data)
 ```
 
 -   We found that there are some columns with '?' values. These columns were ID_REFA_LDA and CATEGORIE_TITRE. For the CATEGORIE_TITRE column we converted it to "INCONNUE" in order to not lose too many lines of data.
@@ -172,8 +172,7 @@ library(readxl)
 # Load the new dataset from Excel
 
 new_data <- read_excel("./data/zones-d-arrets.xlsx")  # Replace with the actual path
-new_data
-
+head(new_data)
 ```
 
 -   Merging the data after grouping by 'ID_REFA_LDA', 'JOUR' and 'LIBELLE_ARRET'
@@ -238,6 +237,39 @@ ggplot(final_data, aes(x = JOUR, y = Sum_NB_VALD)) +
        x = "Date",
        y = "Sum_NB_VALD")
 
+```
+
+```{r}
+# Filter data based on IDs
+filtered_new_data <- new_data %>%
+  filter(ZdCId %in% final_data$ID_REFA_LDA)
+
+# Convert to spatial object
+final_data_sf <- st_as_sf(filtered_new_data, coords = c("ZdAXEpsg2154", "ZdAYEpsg2154"), crs = 2154)
+
+# Transform to EPSG 4326
+final_data_sf <- st_transform(final_data_sf, 4326)
+
+# Extract coordinates
+filtered_new_data$X <- st_coordinates(final_data_sf)[, "X"]
+filtered_new_data$Y <- st_coordinates(final_data_sf)[, "Y"]
+
+# Create leaflet map
+my_map <- leaflet() %>%
+  addTiles() %>%
+  setView(
+    lng = mean(st_coordinates(final_data_sf$geometry)[, "X"]),
+    lat = mean(st_coordinates(final_data_sf$geometry)[, "Y"]),
+    zoom = 11
+  ) %>%
+  addMarkers(
+    data = filtered_new_data,
+    lng = ~X,  # Use the X column for longitude
+    lat = ~Y   # Use the Y column for latitude
+  )
+
+# Show the map
+my_map
 ```
 
 -   With this graph about the daily ridership data, we observe a regular drop of validations each year at the same month, mostly in july and especially august. It's due to the students and workers mostly going on vacations in august and thus stopping to use the network.
